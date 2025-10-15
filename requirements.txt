@@ -1,0 +1,67 @@
+#Security
+    # 1. API Key Management
+    - Store AI API keys in environment variables (never commit)
+    - Use python-dotenv or cloud secrets manager
+    - Rotate keys regularly
+
+    # 2. Authentication
+    - Implement JWT tokens or Supabase Auth
+    - Verify tokens on every request
+    - Use HTTPS only (no HTTP)
+
+    # 3. Rate Limiting
+    from slowapi import Limiter
+    - Prevent abuse (e.g., 10 requests/minute per user)
+    - Protect AI API costs
+
+    # 4. Input Validation
+    from pydantic import BaseModel, validator
+    - Validate file types (only images)
+    - Limit file size (e.g., max 10MB)
+    - Sanitize metadata inputs
+
+    # 5. CORS Configuration
+    from fastapi.middleware.cors import CORSMiddleware
+    - Only allow your Flutter app's domain
+    - Don't use allow_origins=["*"] in production
+
+# Supabase Integration
+# See Pdf for Critical Backend Tasks
+# AI API Calls cost optimization
+    # 1. Cache identical images (hash-based)
+    import hashlib
+
+    def get_image_hash(image_bytes):
+        return hashlib.sha256(image_bytes).hexdigest()
+
+    # Check cache before calling AI
+    cached = supabase.table("cache").select("*").eq("hash", img_hash).execute()
+    if cached.data:
+        return cached.data[0]["result"]
+
+    # 2. Compress images before sending
+    from PIL import Image
+    image = Image.open(BytesIO(image_bytes))
+    image = image.resize((1024, 1024))  # Claude handles up to 1568px
+
+    # 3. Use rate limits per user
+    @limiter.limit("5/minute")  # Only 5 analyses per minute
+# Production Deployment Checklist
+    # Environment Variables (.env)
+    OPENAI_API_KEY=sk-ant-...
+    SUPABASE_URL=https://xxx.supabase.co
+    SUPABASE_SERVICE_KEY=eyJhbGc...
+    ALLOWED_ORIGINS=https://yourapp.com
+    MAX_FILE_SIZE_MB=10
+
+    # Deploy to (choose one):
+    - Railway.app (easiest, $5/month)
+    - Render.com (free tier available)
+    - AWS Lambda + API Gateway (cheapest for low traffic)
+    - Google Cloud Run (auto-scaling)
+
+    # Must-haves:
+    ✅ HTTPS certificate (automatic on Railway/Render)
+    ✅ Environment variables set in platform
+    ✅ Health check endpoint (/health)
+    ✅ Logging enabled

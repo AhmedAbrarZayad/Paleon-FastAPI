@@ -1,0 +1,178 @@
+CLASSIFICATION PROMPT:
+================================================================================
+Certainly! Below is a comprehensive and detailed prompt that can be used with OpenAI's Vision API to classify images of fossils, based on the provided documentation. This prompt includes all necessary components such as visual features to look for, decision funnel, classification categories, step-by-step logic, handling of edge cases, output format, and confidence scoring.
+
+---
+
+**Prompt for OpenAI's Vision API: Fossil Image Classification**
+
+**1. Visual Features to Look For:**
+   - **Tooth:** Identify root view, occlusal (top) view, and full profile. Look for macro features like serrations or denticles.
+   - **Bone:** Examine cortical vs cancellous texture, end morphology, articular surfaces, and cross-section if broken.
+   - **Shell (Ammonite/Bivalve/Gastropod/Echinoid):** Identify suture style, hinge teeth, keel/ribs/spines, and show both sides.
+   - **Trace Fossils:** Show relief, orientation, and context layer; use oblique light and metric scale.
+   - **Plant/Wood:** Display growth rings/tracheids; check for permineralization vs modern; consider UV light.
+   - **Amber:** Show inclusions with macro; check flow lines; avoid reflections.
+
+**2. Decision Funnel:**
+   - **Step 1:** Check for scale presence. If absent, note "scale coin/metric ruler" in `needs_more`.
+   - **Step 2:** Evaluate quality of views. If critical views are missing, set `diagnostic`: false and lower `overall_confidence`.
+   - **Step 3:** Compare visible features against known taxonomies. Use project-provided taxonomies first, then conservative fallbacks.
+   - **Step 4:** Output results in strict JSON format, including all required fields.
+
+**3. Classification Categories:**
+   - **Coarse Categories:** Tooth, Bone, Shell, Trace, Plant/Wood, Amber, Not Fossil.
+   - **Fine Labels:** Specific taxonomic identifications based on visible diagnostic features.
+
+**4. Step-by-Step Classification Logic:**
+   - **Identify Coarse Category:** Use visual features to determine if the object is a tooth, bone, shell, etc.
+   - **Determine Fine Label:** If diagnostic features are visible, assign a genus/species guess.
+   - **Evaluate Confidence:** Use the confidence mapping to assign high, medium, or low confidence based on the number of diagnostic cues and quality of images.
+   - **Handle Uncertainty:** If features are ambiguous, use terms like "likely" or "estimated" and lower confidence.
+
+**5. Handling Edge Cases:**
+   - **Modern or Human-Made Objects:** Set `coarse_category`: "not_fossil" and provide explanation with visible cues.
+   - **Insufficient Data:** If images/metadata are insufficient, output a conservative line: "Unclear, likely indeterminate fossil fragment. Low confidence."
+   - **Endangered/Protected Materials:** Flag in `condition_notes` and reduce confidence.
+
+**6. Exact Output Format (JSON Structure):**
+```json
+{
+  "coarse_category": "string",
+  "fine_label": "string",
+  "genus_species_guess": [
+    {
+      "taxon": "string",
+      "confidence": "string",
+      "basis": "string"
+    }
+  ],
+  "likely_period": "string",
+  "evidence": ["string"],
+  "ruled_out": [
+    {
+      "taxon": "string",
+      "reason": "string"
+    }
+  ],
+  "condition_notes": ["string"],
+  "diagnostic": boolean,
+  "overall_confidence": "string",
+  "needs_more": ["string"],
+  "verdict_nl": "string"
+}
+```
+
+**7. Confidence Scoring and Validation Rules:**
+   - **High Confidence:** ≥3 independent diagnostic cues align; required angles present; scale present; features unambiguous.
+   - **Medium Confidence:** 2 diagnostic cues align OR some required angles missing; minor conflicts.
+   - **Low Confidence:** ≤1 cue aligns OR heavy wear/poor photos; major conflicts or no scale.
+   - **Validation Checklist:**
+     - Ensure JSON is valid with no trailing commas.
+     - "top3" percentages must sum to exactly 100.
+     - "family_candidates" percentages should sum to 100 or nearly.
+     - "evidence" must contain only visible features.
+     - "ruled_out" should list at least one confusion taxon.
+     - "needs_more" should be non-empty if diagnostic=false or confidence is low/medium.
+     - "verdict_nl" should be a short, neutral Dutch summary sentence.
+     - If tampering is suspected, include a warning in "condition_notes".
+     - Species-level ID only if diagnostic features are clearly visible.
+     - No hallucinated provenance, stratigraphy, or seller details.
+
+---
+
+This prompt is designed to be implementation-ready and can be directly used with the Vision API to classify fossil images accurately and consistently.
+
+OUTPUT FORMAT:
+================================================================================
+Based on the provided documentation, here is the exact JSON output format for classification results, including all required fields, data types, nested structures, and validation rules:
+
+### JSON Schema for Classification Results
+
+```json
+{
+  "entries": [
+    {
+      "coarse_category": "string",  // Enum: "tooth", "bone", "shell", "whole_body", "trace", "plant", "not_fossil"
+      "environment": "string",      // Enum: "marine", "terrestrial", "freshwater", "unknown"
+      "top3": [
+        {
+          "family": "string",
+          "probability_pct": "integer"  // Must sum to exactly 100 across all entries
+        }
+      ],
+      "family_candidates": [
+        {
+          "family": "string",
+          "probability_pct": "integer"  // Should sum to 100 or nearly so
+        }
+      ],
+      "genus_species_guess": [
+        {
+          "taxon": "string",
+          "confidence": "string",  // Enum: "high", "medium", "low"
+          "basis": "string"
+        }
+      ],
+      "likely_period": "string",  // Optional, e.g., "Pleistocene (~2.5 Ma–10 ka)"
+      "evidence": [
+        "string"  // Only visible features, no speculation
+      ],
+      "ruled_out": [
+        {
+          "taxon": "string",
+          "reason": "string"
+        }
+      ],
+      "condition_notes": [
+        "string"  // Includes warnings if tampering suspected
+      ],
+      "diagnostic": "boolean",
+      "overall_confidence": "string",  // Enum: "high", "medium", "low"
+      "needs_more": [
+        "string"  // Non-empty if diagnostic=false or confidence is low/medium
+      ],
+      "verdict_nl": "string",  // Short, neutral Dutch summary sentence
+      "verdict_en": "string",  // Short, neutral English summary sentence, max 20 words
+      "stratigraphy/formation": "string",  // Optional
+      "find_context": "string",  // Enum: "beach", "river", "quarry", "mine", "desert", "clay pit", "forest", "cave", "dredged", "market", "unknown"
+      "scale_present": "boolean",
+      "noted_dimensions_mm": {
+        "max_length": "number",
+        "width": "number",
+        "thickness": "number"
+      },  // Optional
+      "seller_or_source": "string",  // Private, do not display
+      "notes_from_user": "string"  // Optional
+    }
+  ]
+}
+```
+
+### Validation Rules
+
+1. **JSON Validity**: Ensure no trailing commas and correct bracket usage.
+2. **Top3 Percentages**: Must sum to exactly 100.
+3. **Family Candidates Percentages**: Should sum to 100 or nearly so.
+4. **Evidence**: Contains only visible features, no speculation.
+5. **Ruled Out**: Must list at least one confusion taxon.
+6. **Needs More**: Must be non-empty if `diagnostic` is false or `overall_confidence` is low/medium.
+7. **Verdict NL**: Must be a short, neutral Dutch summary sentence.
+8. **Condition Notes**: Includes warnings if tampering is suspected.
+9. **Species-Level ID**: Only if diagnostic features are clearly visible.
+10. **No Hallucinated Details**: No unverifiable provenance, stratigraphy, or seller details.
+
+### Decision Funnel
+
+1. **Coarse Category**: Choose one of the enumerated values.
+2. **Environment Guess**: Choose one of the enumerated values.
+3. **Family Candidates**: Rank 1–5 families/clades with probability percentages.
+4. **Species/Genus Guess**: Only if visible diagnostics allow cautious assignment.
+
+### Output Clarity Rule
+
+- **Brevity**: Maximum 20 words in `verdict_en`.
+- **Style**: Plain, neutral, no hedging beyond the single confidence term.
+- **Prohibited**: No speculative localities, unverifiable provenance, or marketing language.
+
+This structured format and validation criteria ensure that the JSON output is programmatically usable and adheres to the specified requirements. If any information is missing or unclear, it should be explicitly stated in the output.
