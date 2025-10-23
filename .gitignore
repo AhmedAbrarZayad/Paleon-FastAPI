@@ -27,6 +27,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Uploads directory (temporary files)
+uploads/
+temp/
+
 # Vector database
 fossils-db/
 chroma-db/
