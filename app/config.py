@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # ===== SECURITY =====
     SECRET_KEY: str = "your-super-secret-key-change-this-in-production-!!!!"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours (was 30 minutes)
     
     # ===== SUPABASE =====
     SUPABASE_URL: str

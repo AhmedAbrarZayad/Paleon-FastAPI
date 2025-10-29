@@ -9,7 +9,7 @@ class TierRateLimiter:
     
     # Rate limits per tier (requests per day)
     LIMITS = {
-        "free": 3,
+        "free": 11,
     }
     
     def __init__(self, redis_client: redis.Redis):
