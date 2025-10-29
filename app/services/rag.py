@@ -9,19 +9,22 @@ Step 3: Format output according to extracted specifications
 from dotenv import load_dotenv
 import os
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import Chroma
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from openai import OpenAI
 import base64
 import json
 from pathlib import Path
+
 # Load environment variables
-load_dotenv("C:\\Users\\ahmed\\Documents\\Flutter\\Paleon\\backend\\.env")
+load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PERSIST_DIR = "./fossils-db"
-COLLECTION_NAME = "fossils_collection"
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "fossils_classification")
 
 # ========== STEP 1: RAG SYSTEM FOR SPECIFICATION EXTRACTION ==========
 
@@ -35,11 +38,18 @@ class SpecificationExtractor:
             openai_api_key=OPENAI_API_KEY
         )
         
-        # Load vector store
-        self.vectorstore = Chroma(
-            persist_directory=PERSIST_DIR,
-            embedding_function=self.embeddings,
-            collection_name=COLLECTION_NAME
+        # Initialize Qdrant client
+        self.qdrant_client = QdrantClient(
+            url=QDRANT_URL,
+            api_key=QDRANT_API_KEY,
+            prefer_grpc=False
+        )
+        
+        # Load vector store from Qdrant
+        self.vectorstore = QdrantVectorStore(
+            client=self.qdrant_client,
+            collection_name=QDRANT_COLLECTION,
+            embedding=self.embeddings
         )
         
         # Initialize LLM
@@ -297,9 +307,8 @@ def main():
     
     classifier = ImageClassifier(classification_prompt, output_format)
     IMAGE_PATHS = [
-        "app/services/tooth-1.jpeg",
-        "app/services/tooth-2.jpeg",
-        "app/services/tooth-3.jpeg"
+        "C:\\Users\\ahmed\\Documents\\Flutter\\Paleon\\backend\\test_image.jpeg",
+        "C:\\Users\\ahmed\\Documents\\Flutter\\Paleon\\backend\\test_image_2.jpeg",
     ]
     result = classifier.classify_image(IMAGE_PATHS)
     print("\n📤 CLASSIFICATION RESULT:")

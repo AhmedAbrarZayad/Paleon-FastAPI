@@ -1,99 +1,94 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer
+from fastapi.security.http import HTTPAuthorizationCredentials
 from app.services.rag import SpecificationExtractor, ImageClassifier
+from app.celery_task import classify_images_task
+from app.celery_config import celery_app
+from app.routers.routes_auth import router as auth_router, get_current_user
+from app.rate_limit import TierRateLimiter
+from app.repositories import ClassificationJobRepository
+from app.config import settings
 import json
 import logging
-from pathlib import Path
-import shutil
 from typing import List
 import uuid
 from datetime import datetime
+import base64
+import io
+from PIL import Image
+import redis
 
 # ==================== LOGGING SETUP ====================
-"""
-LOGGING LEVELS:
-- DEBUG: Detailed information for diagnosing problems
-- INFO: General informational messages
-- WARNING: Warning messages
-- ERROR: Error messages
-- CRITICAL: Critical error messages
 
-How to use:
-logger.debug("Detailed debug info")
-logger.info("General info")
-logger.warning("Warning message")
-logger.error("Error occurred")
-logger.critical("Critical error!")
-"""
-
-# Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Set to DEBUG for more detailed logs
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('app.log', encoding='utf-8'),  # Save to file with UTF-8
-        logging.StreamHandler()  # Also print to console
+        logging.FileHandler('app.log', encoding='utf-8'),
+        logging.StreamHandler()
     ]
 )
 
-# Create logger for this module
 logger = logging.getLogger(__name__)
+
+# ==================== REDIS CONNECTION ====================
+
+redis_client = redis.Redis(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=settings.REDIS_DB,
+    decode_responses=True
+)
+
+# Test Redis connection
+try:
+    redis_client.ping()
+    logger.info("[OK] Connected to Redis")
+except Exception as e:
+    logger.warning(f"Warning: Could not connect to Redis: {e}")
+
+# Initialize rate limiter
+rate_limiter = TierRateLimiter(redis_client)
 
 # ==================== FASTAPI APP SETUP ====================
 
 app = FastAPI(
-    title="Paleon Fossil Classification API",
+    title=settings.PROJECT_NAME,
     description="AI-powered fossil classification using RAG and GPT-4 Vision",
-    version="1.0.0"
+    version=settings.VERSION
 )
 
-# CORS middleware - allows Flutter app to call this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your Flutter app URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ==================== GLOBAL RAG INITIALIZATION ====================
-"""
-IMPORTANT OPTIMIZATION:
-We initialize RAG components ONCE when server starts.
-This is MUCH faster than creating them on every request!
-
-Why?
-- Loading vector database takes time
-- Initializing OpenAI embeddings takes time
-- This way, first request is slow, all others are fast
-"""
+# Include auth routes
+app.include_router(auth_router)
 
 logger.info("=== Initializing RAG system on startup ===")
 
-# Global variables (initialized once)
+# Global variables (for fast endpoint)
 _extractor = None
 _classification_prompt = None
 _output_format = None
 _classifier = None
 
 def get_classifier() -> ImageClassifier:
-    """
-    Get or create the image classifier (singleton pattern).
-    
-    This function ensures we only create the classifier ONCE,
-    not on every request (which would be very slow).
-    """
+    """Get or create the image classifier (singleton pattern)."""
     global _extractor, _classification_prompt, _output_format, _classifier
     
     if _classifier is None:
         logger.info("First request - initializing RAG components...")
         
-        # Initialize extractor
         _extractor = SpecificationExtractor()
         logger.info("[OK] Extractor initialized")
         
-        # Extract specifications (this takes a few seconds)
         logger.info("Extracting classification prompt from PDF...")
         _classification_prompt = _extractor.extract_classification_prompt()
         logger.info("[OK] Classification prompt extracted")
@@ -102,59 +97,14 @@ def get_classifier() -> ImageClassifier:
         _output_format = _extractor.extract_output_format()
         logger.info("[OK] Output format extracted")
         
-        # Create classifier
         _classifier = ImageClassifier(_classification_prompt, _output_format)
         logger.info("[OK] Classifier ready!")
     
     return _classifier
 
-# ==================== FILE HANDLING ====================
+# ==================== SECURITY ====================
 
-# Create uploads directory if it doesn't exist
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-def save_upload_file(upload_file: UploadFile) -> Path:
-    """
-    Save uploaded file to disk temporarily.
-    
-    Args:
-        upload_file: File uploaded by user
-    
-    Returns:
-        Path to saved file
-    
-    Why save to disk?
-    - UploadFile is in memory
-    - We need file path to encode to base64
-    - Temporary storage is fine (we delete after classification)
-    """
-    # Generate unique filename to avoid conflicts
-    file_extension = Path(upload_file.filename).suffix
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = UPLOAD_DIR / unique_filename
-    
-    # Save file
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
-    
-    logger.info(f"Saved file: {file_path}")
-    return file_path
-
-def cleanup_files(file_paths: List[Path]):
-    """
-    Delete temporary files after classification.
-    
-    Args:
-        file_paths: List of file paths to delete
-    """
-    for file_path in file_paths:
-        try:
-            if file_path.exists():
-                file_path.unlink()
-                logger.info(f"Deleted temporary file: {file_path}")
-        except Exception as e:
-            logger.error(f"❌ Error deleting file {file_path}: {e}")
+security = HTTPBearer()
 
 # ==================== API ENDPOINTS ====================
 
@@ -163,57 +113,85 @@ async def read_root():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "message": "Paleon Fossil Classification API",
-        "version": "1.0.0"
+        "message": settings.PROJECT_NAME,
+        "version": settings.VERSION
     }
 
-@app.post("/fossil-image/")
-async def classify_fossil_images(
-    image_files: List[UploadFile] = File(..., description="Upload 1-5 images of the fossil")
+@app.post("/classify-async/")
+async def classify_fossil_images_async(
+    image_files: List[UploadFile] = File(
+        ...,
+        description="Upload 1-5 images of the fossil"
+    ),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Classify fossil images using RAG-enhanced AI.
+    Classify fossil images ASYNCHRONOUSLY using Celery.
+    
+    **REQUIRES AUTHENTICATION** - Pass JWT token in Authorization header
     
     Args:
-        image_files: List of image files (1-5 images of the same fossil)
+        image_files: List of image files (1-5 images)
+        credentials: Bearer token from /auth/login
     
     Returns:
-        JSON with classification results
+        Instant response with job_id
     
     Example Response:
     {
         "success": true,
-        "classification": {
-            "fossil_name": "Megalodon Tooth",
-            "confidence": "high",
-            ...
-        },
-        "metadata": {
-            "num_images": 3,
-            "processing_time_ms": 2345.67
+        "job_id": "550e8400-e29b-41d4-a716-446655440000",
+        "status": "processing",
+        "message": "Classification started. Check /result/{job_id} to get results",
+        "rate_limit": {
+            "limit": 10,
+            "current": 1,
+            "remaining": 9,
+            "reset_at": "2025-10-25T12:30:00"
         }
     }
     """
     
-    request_id = str(uuid.uuid4())[:8]  # Short ID for logging
-    start_time = datetime.now()
+    request_id = str(uuid.uuid4())[:8]
     
-    logger.info(f"[{request_id}] NEW REQUEST - Received {len(image_files)} image(s)")
-    
-    # Validate number of images
-    if len(image_files) == 0:
-        logger.warning(f"[{request_id}] No images provided")
-        raise HTTPException(status_code=400, detail="At least one image is required")
-    
-    if len(image_files) > 5:
-        logger.warning(f"[{request_id}] Too many images: {len(image_files)}")
-        raise HTTPException(status_code=400, detail="Maximum 5 images allowed")
-    
-    saved_file_paths = []
+    logger.info(f"[{request_id}] ASYNC REQUEST - Received {len(image_files)} image(s)")
     
     try:
-        # ==================== STEP 1: SAVE UPLOADED FILES ====================
-        logger.info(f"[{request_id}] Saving uploaded files...")
+        # ===== AUTHENTICATE USER =====
+        current_user = await get_current_user(credentials)
+        logger.info(f"[{request_id}] User authenticated: {current_user['email']}")
+        
+        # ===== CHECK RATE LIMIT =====
+        is_allowed, limit_info = rate_limiter.check_rate_limit(
+            current_user["user_id"],  # UUID from Supabase
+            current_user["tier"]
+        )
+        
+        if not is_allowed:
+            logger.warning(f"[{request_id}] Rate limit exceeded for {current_user['email']}")
+            raise HTTPException(
+                status_code=429,  # Too Many Requests
+                detail=f"Rate limit exceeded. Limit: {limit_info['limit']} requests/day",
+                headers={
+                    "X-RateLimit-Limit": str(limit_info['limit']),
+                    "X-RateLimit-Current": str(limit_info['current']),
+                    "X-RateLimit-Remaining": str(limit_info['remaining']),
+                    "X-RateLimit-Reset": limit_info.get('reset_at', '')
+                }
+            )
+        
+        # Validate number of images
+        if len(image_files) == 0:
+            logger.warning(f"[{request_id}] No images provided")
+            raise HTTPException(status_code=400, detail="At least one image is required")
+        
+        if len(image_files) > 5:
+            logger.warning(f"[{request_id}] Too many images: {len(image_files)}")
+            raise HTTPException(status_code=400, detail="Maximum 5 images allowed")
+        
+        # ===== CONVERT IMAGES TO BASE64 =====
+        logger.info(f"[{request_id}] Converting images to base64...")
+        images_base64 = []
         
         for idx, upload_file in enumerate(image_files, 1):
             # Validate file type
@@ -223,62 +201,165 @@ async def classify_fossil_images(
                     detail=f"File {upload_file.filename} is not an image"
                 )
             
-            # Save file
-            file_path = save_upload_file(upload_file)
-            saved_file_paths.append(file_path)
-            logger.info(f"  [{request_id}] Image {idx}/{len(image_files)}: {upload_file.filename} saved")
+            # Read file into memory
+            image_bytes = await upload_file.read()
+            
+            # Validate image
+            try:
+                img = Image.open(io.BytesIO(image_bytes))
+                img.verify()
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid image {upload_file.filename}: {str(e)}"
+                )
+            
+            # Encode to base64
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            images_base64.append(image_base64)
+            logger.info(f"[{request_id}] Image {idx}/{len(image_files)}: {upload_file.filename} converted")
         
-        # ==================== STEP 2: GET CLASSIFIER ====================
-        logger.info(f"[{request_id}] Getting classifier...")
-        classifier = get_classifier()
-        logger.info(f"  [{request_id}] Classifier ready")
+        # ===== CREATE JOB IN DATABASE =====
+        job_id = str(uuid.uuid4())
+        try:
+            ClassificationJobRepository.create_job(
+                user_id=current_user["user_id"],  # UUID from Supabase
+                job_id=job_id,
+                image_count=len(image_files)
+            )
+            logger.info(f"[{request_id}] Job created in database: {job_id}")
+        except Exception as e:
+            logger.error(f"[{request_id}] Error creating job in database: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create classification job"
+            )
         
-        # ==================== STEP 3: CLASSIFY IMAGES ====================
-        logger.info(f"[{request_id}] Classifying {len(saved_file_paths)} image(s)...")
+        # ===== SEND TO CELERY =====
+        logger.info(f"[{request_id}] Sending task to Celery worker...")
+        task = classify_images_task.delay(
+            images_base64=images_base64,
+            request_id=request_id,
+            job_id=job_id,
+            user_id=current_user["user_id"]  # UUID from Supabase
+        )
         
-        # Convert Path objects to strings for the classifier
-        image_path_strings = [str(path) for path in saved_file_paths]
+        logger.info(f"[{request_id}] Task queued with ID: {task.id}")
         
-        # Classify!
-        result = classifier.classify_image(image_path_strings)
-        
-        logger.info(f"  [{request_id}] Classification complete!")
-        
-        # ==================== STEP 4: CALCULATE METRICS ====================
-        end_time = datetime.now()
-        processing_time_ms = (end_time - start_time).total_seconds() * 1000
-        
-        # ==================== STEP 5: PREPARE RESPONSE ====================
-        response = {
+        # Return response
+        return {
             "success": True,
+            "job_id": job_id,
+            "status": "processing",
+            "message": f"Classification started. Check /result/{job_id} for status",
             "request_id": request_id,
-            "classification": result,
-            "metadata": {
-                "num_images_analyzed": len(image_files),
-                "processing_time_ms": round(processing_time_ms, 2),
-                "timestamp": end_time.isoformat()
-            }
+            "rate_limit": limit_info
         }
-        
-        logger.info(f"[{request_id}] SUCCESS - Processed in {processing_time_ms:.2f}ms")
-        logger.debug(f"[{request_id}] Response: {json.dumps(response, indent=2)}")
-        
-        return response
     
     except HTTPException:
-        # Re-raise HTTP exceptions (already formatted)
         raise
     
     except Exception as e:
-        # Catch any unexpected errors
-        logger.error(f"[{request_id}] ERROR: {str(e)}", exc_info=True)
+        logger.error(f"[{request_id}] Error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Classification failed: {str(e)}"
         )
+
+@app.get("/result/{job_id}")
+async def get_classification_result(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Get classification result by job ID.
     
-    finally:
-        # ==================== CLEANUP ====================
-        # Always delete temporary files, even if error occurred
-        logger.info(f"[{request_id}] Cleaning up temporary files...")
-        cleanup_files(saved_file_paths)
+    **REQUIRES AUTHENTICATION**
+    
+    Args:
+        job_id: Job ID returned from /classify-async/
+        credentials: Bearer token
+    
+    Returns:
+        - If pending: {"status": "pending"}
+        - If processing: {"status": "processing"}
+        - If complete: {"status": "complete", "result": {...}}
+        - If failed: {"status": "failed", "error": "..."}
+    """
+    
+    logger.info(f"Result check for job: {job_id}")
+    
+    try:
+        # Authenticate user
+        current_user = await get_current_user(credentials)
+        
+        # Get job from database
+        job = ClassificationJobRepository.get_job(job_id)
+        
+        if not job:
+            logger.warning(f"Job not found: {job_id}")
+            raise HTTPException(
+                status_code=404,
+                detail="Job not found"
+            )
+        
+        # Verify ownership
+        if job["user_id"] != current_user["user_id"]:  # UUID from Supabase
+            logger.warning(f"Unauthorized access to job {job_id} by user {current_user['user_id']}")
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized"
+            )
+        
+        # Return result
+        return {
+            "status": job["status"],
+            "job_id": job_id,
+            "result": job.get("result"),
+            "error": job.get("error_message"),
+            "processing_time_ms": job.get("processing_time_ms"),
+            "created_at": job.get("created_at"),
+            "completed_at": job.get("completed_at")
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving result: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve result"
+        )
+
+@app.get("/jobs")
+async def get_user_jobs(
+    limit: int = 10,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Get user's recent classification jobs.
+    
+    **REQUIRES AUTHENTICATION**
+    """
+    
+    try:
+        current_user = await get_current_user(credentials)
+        
+        jobs = ClassificationJobRepository.get_user_jobs(
+            user_id=current_user["user_id"],  # UUID from Supabase
+            limit=limit
+        )
+        
+        return {
+            "success": True,
+            "jobs": jobs
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving jobs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve jobs"
+        )
