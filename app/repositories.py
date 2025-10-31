@@ -329,3 +329,199 @@ class ClassificationJobRepository:
         except Exception as e:
             logger.error(f"Error getting user jobs: {e}")
             return []
+
+
+class GuidesLessonsRepository:
+    """Guides and Lessons repository for Supabase"""
+    
+    @staticmethod
+    def create_guide_or_lesson(title: str, description: str, content_type: str, author_id: str) -> Dict:
+        """Create a new guide or lesson (Deep Dive)"""
+        try:
+            data = {
+                "title": title,
+                "description": description,
+                "type": content_type,  # "guide" or "deep_dive"
+                "authorid": author_id,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            response = supabase.table("guides&lessons").insert(data).execute()
+            
+            if response.data:
+                logger.info(f"Created {content_type}: {title}")
+                return response.data[0]
+            else:
+                raise Exception(f"Failed to create {content_type}")
+        
+        except Exception as e:
+            logger.error(f"Error creating guide/lesson: {e}")
+            raise
+    
+    @staticmethod
+    def get_all_guides_and_lessons() -> list:
+        """Get all guides and lessons"""
+        try:
+            response = supabase.table("guides&lessons").select("*").order("created_at", desc=True).execute()
+            return response.data if response.data else []
+        
+        except Exception as e:
+            logger.error(f"Error fetching guides and lessons: {e}")
+            return []
+    
+    @staticmethod
+    def get_by_type(content_type: str) -> list:
+        """Get guides or lessons by type"""
+        try:
+            response = supabase.table("guides&lessons").select("*").eq("type", content_type).order("created_at", desc=True).execute()
+            return response.data if response.data else []
+        
+        except Exception as e:
+            logger.error(f"Error fetching {content_type}s: {e}")
+            return []
+
+
+class VisitedRepository:
+    """Track visited guides/lessons"""
+    
+    @staticmethod
+    def record_visit(user_id: str, lesson_id: int):
+        """Record or increment visit to a lesson/guide"""
+        try:
+            # Check if visit exists
+            existing = supabase.table("visited").select("*").eq("userid", user_id).eq("lessonid", lesson_id).execute()
+            
+            if existing.data:
+                # Increment times
+                current_times = existing.data[0].get("times", 0)
+                supabase.table("visited").update({
+                    "times": current_times + 1
+                }).eq("userid", user_id).eq("lessonid", lesson_id).execute()
+                logger.info(f"Incremented visit count for user {user_id}, lesson {lesson_id}")
+            else:
+                # Create new visit record
+                supabase.table("visited").insert({
+                    "userid": user_id,
+                    "lessonid": lesson_id,
+                    "times": 1
+                }).execute()
+                logger.info(f"Recorded first visit for user {user_id}, lesson {lesson_id}")
+            
+            return {"success": True}
+        
+        except Exception as e:
+            logger.error(f"Error recording visit: {e}")
+            raise
+
+
+class ReadRepository:
+    """Track read articles"""
+    
+    @staticmethod
+    def record_read(user_id: str, article_id: int):
+        """Record or increment article read"""
+        try:
+            # Check if read exists
+            existing = supabase.table("read").select("*").eq("userid", user_id).eq("articleid", article_id).execute()
+            
+            if existing.data:
+                # Increment times
+                current_times = existing.data[0].get("times", 0)
+                supabase.table("read").update({
+                    "times": current_times + 1
+                }).eq("userid", user_id).eq("articleid", article_id).execute()
+                logger.info(f"Incremented read count for user {user_id}, article {article_id}")
+            else:
+                # Create new read record
+                supabase.table("read").insert({
+                    "userid": user_id,
+                    "articleid": article_id,
+                    "times": 1
+                }).execute()
+                logger.info(f"Recorded first read for user {user_id}, article {article_id}")
+            
+            return {"success": True}
+        
+        except Exception as e:
+            logger.error(f"Error recording read: {e}")
+            raise
+
+
+class FossilRepository:
+    """Manage fossil discoveries"""
+    
+    @staticmethod
+    def create_or_update_fossil(name: str, species: str = None, location: str = None, age: float = None, images: str = None) -> Dict:
+        """Create a new fossil entry or return existing"""
+        try:
+            # Check if fossil with same name exists
+            existing = supabase.table("fossils").select("*").eq("name", name).execute()
+            
+            if existing.data:
+                logger.info(f"Fossil '{name}' already exists")
+                return existing.data[0]
+            
+            # Create new fossil
+            fossil_data = {
+                "name": name,
+                "species": species,
+                "location": location,
+                "age": age,
+                "images": images
+            }
+            
+            response = supabase.table("fossils").insert(fossil_data).execute()
+            
+            if response.data:
+                logger.info(f"Created new fossil: {name}")
+                return response.data[0]
+            else:
+                raise Exception("Failed to create fossil")
+        
+        except Exception as e:
+            logger.error(f"Error creating fossil: {e}")
+            raise
+
+
+class FoundRepository:
+    """Track user fossil discoveries"""
+    
+    @staticmethod
+    def record_found(user_id: str, fossil_name: str):
+        """Record or increment fossil discovery"""
+        try:
+            # Check if user has found this fossil before
+            existing = supabase.table("found").select("*").eq("userid", user_id).eq("name", fossil_name).execute()
+            
+            if existing.data:
+                # Increment times
+                current_times = existing.data[0].get("times", 0)
+                supabase.table("found").update({
+                    "times": current_times + 1
+                }).eq("userid", user_id).eq("name", fossil_name).execute()
+                logger.info(f"User {user_id} found '{fossil_name}' again (total: {current_times + 1})")
+            else:
+                # Create new found record
+                supabase.table("found").insert({
+                    "userid": user_id,
+                    "name": fossil_name,
+                    "times": 1
+                }).execute()
+                logger.info(f"User {user_id} found '{fossil_name}' for the first time")
+            
+            return {"success": True}
+        
+        except Exception as e:
+            logger.error(f"Error recording found fossil: {e}")
+            raise
+    
+    @staticmethod
+    def get_user_fossils(user_id: str) -> list:
+        """Get all fossils found by a user"""
+        try:
+            response = supabase.table("found").select("*").eq("userid", user_id).execute()
+            return response.data if response.data else []
+        
+        except Exception as e:
+            logger.error(f"Error fetching user fossils: {e}")
+            return []

@@ -7,6 +7,8 @@ from app.services.rag import SpecificationExtractor, ImageClassifier
 from app.celery_task import classify_images_task
 from app.celery_config import celery_app
 from app.routers.routes_auth import router as auth_router, get_current_user
+from app.routers.content import router as content_router
+from app.routers.fossils_tracking import router as fossils_router
 from app.rate_limit import TierRateLimiter
 from app.repositories import ClassificationJobRepository
 from app.config import settings
@@ -70,6 +72,8 @@ app.add_middleware(
 
 # Include auth routes
 app.include_router(auth_router)
+app.include_router(content_router)
+app.include_router(fossils_router)
 
 logger.info("=== Initializing RAG system on startup ===")
 
