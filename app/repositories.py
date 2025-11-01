@@ -7,6 +7,8 @@ from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
+
+
 class UserRepository:
     """User repository for Supabase"""
     
@@ -335,7 +337,15 @@ class GuidesLessonsRepository:
     """Guides and Lessons repository for Supabase"""
     
     @staticmethod
-    def create_guide_or_lesson(title: str, description: str, content_type: str, author_id: str) -> Dict:
+    def create_guide_or_lesson(
+        title: str, 
+        description: str, 
+        content_type: str, 
+        author_id: str,
+        image_url: str = None,
+        duration: str = None,
+        level: str = None
+    ) -> Dict:
         """Create a new guide or lesson (Deep Dive)"""
         try:
             data = {
@@ -343,6 +353,9 @@ class GuidesLessonsRepository:
                 "description": description,
                 "type": content_type,  # "guide" or "deep_dive"
                 "authorid": author_id,
+                "image_url": image_url,
+                "duration": duration,
+                "level": level,
                 "created_at": datetime.utcnow().isoformat()
             }
             
@@ -356,6 +369,52 @@ class GuidesLessonsRepository:
         
         except Exception as e:
             logger.error(f"Error creating guide/lesson: {e}")
+            raise
+    
+    @staticmethod
+    def update_guide_or_lesson(
+        content_id: int,
+        title: str, 
+        description: str, 
+        content_type: str,
+        image_url: str = None,
+        duration: str = None,
+        level: str = None
+    ) -> Dict:
+        """Update an existing guide or lesson (Deep Dive)"""
+        try:
+            logger.info(f"[REPO] Updating guide/lesson with ID: {content_id}")
+            
+            data = {
+                "title": title,
+                "description": description,
+                "type": content_type,
+                "image_url": image_url,
+                "duration": duration,
+                "level": level
+            }
+            
+            # Remove None values
+            data = {k: v for k, v in data.items() if v is not None}
+            
+            logger.info(f"[REPO] Update data: {data}")
+            
+            response = supabase.table("guides&lessons").update(data).eq("id", content_id).execute()
+            
+            logger.info(f"[REPO] Update response: {response}")
+            logger.info(f"[REPO] Response data: {response.data}")
+            
+            if response.data and len(response.data) > 0:
+                logger.info(f"[REPO] Successfully updated content {content_id}")
+                return response.data[0]
+            else:
+                logger.warning(f"[REPO] No rows updated for ID {content_id} - item may not exist")
+                return None
+        
+        except Exception as e:
+            logger.error(f"[REPO] Error updating guide/lesson: {e}")
+            import traceback
+            logger.error(f"[REPO] Traceback:\n{traceback.format_exc()}")
             raise
     
     @staticmethod
@@ -379,6 +438,32 @@ class GuidesLessonsRepository:
         except Exception as e:
             logger.error(f"Error fetching {content_type}s: {e}")
             return []
+    
+    @staticmethod
+    def delete_guide_or_lesson(content_id: int) -> bool:
+        """Delete a guide or lesson"""
+        try:
+            logger.info(f"[REPO] Deleting guide/lesson with ID: {content_id}")
+            response = supabase.table("guides&lessons").delete().eq("id", content_id).execute()
+            
+            logger.info(f"[REPO] Delete response: {response}")
+            logger.info(f"[REPO] Response data: {response.data}")
+            logger.info(f"[REPO] Response data type: {type(response.data)}")
+            logger.info(f"[REPO] Response data length: {len(response.data) if response.data else 0}")
+            
+            # Check if any rows were deleted
+            if response.data and len(response.data) > 0:
+                logger.info(f"[REPO] Successfully deleted {len(response.data)} row(s)")
+                return True
+            else:
+                logger.warning(f"[REPO] No rows deleted for ID {content_id} - item may not exist")
+                return False
+        
+        except Exception as e:
+            logger.error(f"[REPO] Error deleting guide/lesson: {e}")
+            import traceback
+            logger.error(f"[REPO] Traceback:\n{traceback.format_exc()}")
+            return False
 
 
 class VisitedRepository:
@@ -481,6 +566,20 @@ class FossilRepository:
         except Exception as e:
             logger.error(f"Error creating fossil: {e}")
             raise
+    
+    @staticmethod
+    def get_all_fossils() -> list:
+        """Get all fossils from the fossils table"""
+        try:
+            logger.info("Fetching all fossils from database")
+            response = supabase.table("fossils").select("*").execute()
+            fossils = response.data if response.data else []
+            logger.info(f"Retrieved {len(fossils)} fossils from database")
+            return fossils
+        
+        except Exception as e:
+            logger.error(f"Error fetching all fossils: {e}")
+            return []
 
 
 class FoundRepository:
@@ -525,3 +624,89 @@ class FoundRepository:
         except Exception as e:
             logger.error(f"Error fetching user fossils: {e}")
             return []
+        
+
+
+class GuidesLessonsExtraRepository:
+    """Repository for managing extra images for guides and deep dives"""
+    
+    @staticmethod
+    def add_extra_image(guide_id: int, image_url: str):
+        """Add an extra image for a guide or deep dive"""
+        try:
+            data = {
+                "guides_lessons_id": guide_id,
+                "imageurl": image_url
+            }
+            
+            response = supabase.table("guides&lessonsExtra").insert(data).execute()
+            
+            if response.data:
+                logger.info(f"Added extra image for guide/dive {guide_id}")
+                return response.data[0]
+            else:
+                raise Exception("Failed to add extra image")
+        
+        except Exception as e:
+            logger.error(f"Error adding extra image: {e}")
+            raise
+    
+    @staticmethod
+    def get_extra_images(guide_id: int) -> list:
+        """Get all extra images for a guide or deep dive"""
+        try:
+            response = supabase.table("guides&lessonsExtra").select("*").eq("guides_lessons_id", guide_id).execute()
+            return response.data if response.data else []
+        
+        except Exception as e:
+            logger.error(f"Error fetching extra images: {e}")
+            return []
+    
+    @staticmethod
+    def delete_extra_image(guide_id: int, image_url: str) -> bool:
+        """Delete an extra image"""
+        try:
+            supabase.table("guides&lessonsExtra").delete().eq("guides_lessons_id", guide_id).eq("imageurl", image_url).execute()
+            logger.info(f"Deleted extra image for guide/dive {guide_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error deleting extra image: {e}")
+            return False
+
+
+class StorageRepository:
+    """Repository for managing file uploads to Supabase Storage"""
+    
+    @staticmethod
+    def upload_image(bucket_name: str, file_path: str, file_data: bytes, content_type: str = "image/jpeg") -> str:
+        """Upload an image to Supabase storage and return the public URL"""
+        try:
+            # Upload file to storage
+            response = supabase.storage.from_(bucket_name).upload(
+                file_path,
+                file_data,
+                {"content-type": content_type}
+            )
+            
+            # Get public URL
+            public_url = supabase.storage.from_(bucket_name).get_public_url(file_path)
+            
+            logger.info(f"Uploaded image to {bucket_name}/{file_path}")
+            return public_url
+        
+        except Exception as e:
+            logger.error(f"Error uploading image: {e}")
+            raise
+    
+    @staticmethod
+    def delete_image(bucket_name: str, file_path: str) -> bool:
+        """Delete an image from Supabase storage"""
+        try:
+            supabase.storage.from_(bucket_name).remove([file_path])
+            logger.info(f"Deleted image from {bucket_name}/{file_path}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error deleting image: {e}")
+            return False
